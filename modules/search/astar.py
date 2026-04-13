@@ -12,7 +12,7 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
         if (u, v) not in weight_dict or t < weight_dict[(u, v)]:
             weight_dict[(u, v)] = t
             
-    # Tạo một DiGraph đơn giản từ MultiDiGraph để chạy A* dễ hơn
+
     G_simple = nx.DiGraph()
     for u, v, data in cleaned_graph.edges(data=True):
         if (u, v) in weight_dict:
