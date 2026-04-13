@@ -10,7 +10,7 @@
 | STT | Họ và tên | MSSV | Email | Vai trò |
 |:---:|:---|:---|:---|:---|
 | 1 | Vạn Trường Thành | 2354107 | thanh.van081205@hcmut.edu.vn | Quản lý hệ thống & Tích hợp |
-| 2 | [Tên thành viên 2] | [MSSV] | [Email] | Thuật toán Tìm kiếm ($A^*$) & CSP |
+| 2 | Lê Minh trí] | [MSSV] | [Email] | Thuật toán Tìm kiếm ($A^*$) & CSP |
 | 3 | [Tên thành viên 3] | [MSSV] | [Email] | Học máy dự đoán chi phí |
 | 4 | [Tên thành viên 4] | [MSSV] | [Email] | Mạng Bayes & Logic tri thức |
 
