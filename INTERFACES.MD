@@ -1,4 +1,4 @@
- # INTERFACES.md — Giao ước Dữ liệu Giữa Các Module
+# INTERFACES.md — Giao ước Dữ liệu Giữa Các Module
 
 > **Mục đích:** File này định nghĩa chính xác định dạng input/output của từng module.  
 > Mọi thành viên **phải tuân thủ** các interface này để các module có thể ghép nối với nhau mà không phát sinh lỗi.  
@@ -40,7 +40,7 @@ def load_map(place_name: str) -> dict:
         graph_data (dict): {
             "G": nx.MultiDiGraph,        # Đồ thị NetworkX gốc từ osmnx
             "nodes": pd.DataFrame,       # Thông tin các nút (node_id, x, y)
-            "edges": pd.DataFrame        # Thông tin các cạnh (u, v, length, speed_kph, highway)
+            "edges": pd.DataFrame        # Thông tin các cạnh (u, v, length, maxspeed, highway)
         }
     """
 ```
@@ -52,7 +52,7 @@ from modules.graph.map_loader import load_map
 graph_data = load_map("Quan 1, Ho Chi Minh City, Vietnam")
 G         = graph_data["G"]
 nodes     = graph_data["nodes"]   # DataFrame: [node_id, x, y]
-edges     = graph_data["edges"]   # DataFrame: [u, v, length, speed_kph, highway]
+edges     = graph_data["edges"]   # DataFrame: [u, v, length, maxspeed, highway]
 ```
 
 ---
@@ -136,7 +136,7 @@ Dự đoán thời gian di chuyển (phút) cho từng cạnh dựa trên đặc
 
 ### Input
 ```python
-edges: pd.DataFrame           # graph_data["edges"] — cần cột: length, speed_kph, highway
+edges: pd.DataFrame           # graph_data["edges"] — cần cột: length, maxspeed, highway
 congestion_df: pd.DataFrame   # Output từ Module 3 — cần cột: u, v, p_congestion
 ```
 
