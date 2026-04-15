@@ -74,18 +74,12 @@ def visualize_map(graph_data: dict, latitude: float, longitude: float, zoom: int
     m = folium.Map(location=[latitude, longitude], zoom_start=zoom)
 
     # Vẽ các đoạn đường lên bản đồ
+    node_coords = nodes.set_index('osmid')[['y', 'x']].apply(tuple, axis=1).to_dict()
     for _, row in edges.iterrows():
-        u_data = nodes[nodes["osmid"] == row["u"]]
-        v_data = nodes[nodes["osmid"] == row["v"]]
-        if not u_data.empty and not v_data.empty:
-            u_coord = (u_data.iloc[0]["y"], u_data.iloc[0]["x"])
-            v_coord = (v_data.iloc[0]["y"], v_data.iloc[0]["x"])
-            folium.PolyLine(
-                [u_coord, v_coord],
-                color="blue",
-                weight=2,
-                opacity=0.5
-            ).add_to(m)
+        u_coord = node_coords.get(row["u"])
+        v_coord = node_coords.get(row["v"])
+        if u_coord and v_coord:
+            folium.PolyLine([u_coord, v_coord], color="blue", weight=2, opacity=0.5).add_to(m)
 
     # Đánh dấu vị trí trung tâm
     folium.Marker(
