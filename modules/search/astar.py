@@ -12,7 +12,6 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
         if (u, v) not in weight_dict or t < weight_dict[(u, v)]:
             weight_dict[(u, v)] = t
             
-
     G_simple = nx.DiGraph()
     for u, v, data in cleaned_graph.edges(data=True):
         if (u, v) in weight_dict:
@@ -28,7 +27,30 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
                 G_simple.add_edge(u, v, weight=w)
 
     def heuristic(n1, n2):
-        return 0 
+        try:
+            x1 = cleaned_graph.nodes[n1]['x'] # Kinh độ 1
+            y1 = cleaned_graph.nodes[n1]['y'] # Vĩ độ 1
+            x2 = cleaned_graph.nodes[n2]['x'] # Kinh độ 2
+            y2 = cleaned_graph.nodes[n2]['y'] # Vĩ độ 2
+            
+            # Tính khoảng cách bề mặt Trái Đất (Haversine) ra Đơn vị: mét
+            R = 6371000.0  # Bán kính Trái Đất
+            phi1, phi2 = math.radians(y1), math.radians(y2)
+            dphi = math.radians(y2 - y1)
+            dlambda = math.radians(x2 - x1)
+            
+            a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist_m = R * c
+            
+            # Ước lượng thời gian: Vận tốc di chuyển lớn nhất 120km/h = 2000 mét/phút
+            max_speed_m_per_min = 2000.0 
+            
+            # Trả về số phút tối thiểu để giữ luật Admissible cho A*
+            return dist_m / max_speed_m_per_min 
+        except KeyError:
+            return 0
+
 
   # Tính toán ma trận khoảng cách giữa các node quan trọng (Origin + Destinations)
     pois = [origin] + destinations
