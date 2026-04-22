@@ -38,27 +38,33 @@ class MapGraph:
         """Thay thế đồ thị hiện tại bằng đồ thị đã lọc các đường vi phạm từ TV4."""
         self.G = cleaned_graph
 
-    def get_heuristic_distance(self, node_a: int, node_b: int, max_speed_kmh: float = 60.0) -> float:
+    def get_heuristic_distance(self, node_a: int, node_b: int, max_speed_kmh: float = 120.0) -> float:
         """
         Tính Heuristic: Thời gian ngắn nhất (phút) theo đường chim bay giữa 2 node.
+        Dùng công thức Haversine để tính khoảng cách thực tế trên bề mặt Trái Đất.
         Đây là Admissible Heuristic (luôn <= thời gian thực tế) giúp A* chạy đúng.
         """
         coord_a = self.node_coords.get(node_a)
         coord_b = self.node_coords.get(node_b)
-        
+
         if not coord_a or not coord_b:
-            return 0.0 # Fallback an toàn nếu lỗi data
-            
-        # Tính khoảng cách Euclidean gần đúng (dành cho tọa độ GPS quy mô nhỏ)
-        # 1 độ GPS xấp xỉ 111 km.
-        lat_diff = (coord_a[0] - coord_b[0]) * 111.0
-        lon_diff = (coord_a[1] - coord_b[1]) * 111.0 * math.cos(math.radians(coord_a[0]))
-        
-        distance_km = math.hypot(lat_diff, lon_diff)
-        
-        # Đổi ra thời gian (phút) = (Quãng đường / Vận tốc tối đa) * 60
-        time_minutes = (distance_km / max_speed_kmh) * 60.0
-        return time_minutes
+            return 0.0  # Fallback an toàn nếu lỗi data
+
+        R = 6371000.0  # Bán kính Trái Đất (mét)
+
+        lat1, lon1 = math.radians(coord_a[0]), math.radians(coord_a[1])
+        lat2, lon2 = math.radians(coord_b[0]), math.radians(coord_b[1])
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        dist_m = R * c
+
+        # Đổi ra thời gian (phút) = (Quãng đường / Vận tốc tối đa)
+        max_speed_m_per_min = max_speed_kmh * 1000.0 / 60.0
+        return dist_m / max_speed_m_per_min
 
 
 class DeliveryVehicle:
