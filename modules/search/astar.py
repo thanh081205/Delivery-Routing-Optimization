@@ -2,57 +2,32 @@ import networkx as nx
 import pandas as pd
 from itertools import permutations
 import math
+from modules.graph.core_system import MapGraph
 
 def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, origin: int, destinations: list[int], time_windows: dict, start_time: float) -> dict:
-    weight_dict = {}
-    for _, row in weighted_edges.iterrows():
-        u = int(row['u'])
-        v = int(row['v'])
-        t = float(row['travel_time_min'])
-        if (u, v) not in weight_dict or t < weight_dict[(u, v)]:
-            weight_dict[(u, v)] = t
-            
-    G_simple = nx.DiGraph()
-    for u, v, data in cleaned_graph.edges(data=True):
-        if (u, v) in weight_dict:
-            w = weight_dict[(u, v)]
-            if G_simple.has_edge(u, v):
-                G_simple[u][v]['weight'] = min(G_simple[u][v]['weight'], w)
-            else:
-                G_simple.add_edge(u, v, weight=w)
-        else:
-            # Nếu không có trong weighted_edges, giả sử một trọng số dự phòng 
-            w = data.get('length', 100) / (data.get('maxspeed', 30) * 1000 / 60) if isinstance(data.get('maxspeed'), (int, float)) else 9999
-            if not G_simple.has_edge(u, v):
-                G_simple.add_edge(u, v, weight=w)
+    # Đồng bộ hóa với core_system bằng cách sử dụng MapGraph
+    nodes_list = []
+    for node_id, data in cleaned_graph.nodes(data=True):
+        nodes_list.append({"osmid": node_id, "x": data.get("x", 0.0), "y": data.get("y", 0.0)})
+    nodes_df = pd.DataFrame(nodes_list)
+    
+    graph_data = {
+        "G": cleaned_graph,
+        "nodes": nodes_df,
+        "edges": pd.DataFrame() # Không cần thiết cho heuristic
+    }
+    
+    # Khởi tạo MapGraph
+    map_graph = MapGraph(graph_data)
+    
+    # Cập nhật trọng số thông qua hàm đồng bộ của hệ thống
+    map_graph.update_edge_weights(weighted_edges)
 
-    def heuristic(n1, n2):
-        try:
-            x1 = cleaned_graph.nodes[n1]['x'] # Kinh độ 1
-            y1 = cleaned_graph.nodes[n1]['y'] # Vĩ độ 1
-            x2 = cleaned_graph.nodes[n2]['x'] # Kinh độ 2
-            y2 = cleaned_graph.nodes[n2]['y'] # Vĩ độ 2
-            
-            # Tính khoảng cách bề mặt Trái Đất (Haversine) ra Đơn vị: mét
-            R = 6371000.0  # Bán kính Trái Đất
-            phi1, phi2 = math.radians(y1), math.radians(y2)
-            dphi = math.radians(y2 - y1)
-            dlambda = math.radians(x2 - x1)
-            
-            a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
-            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-            dist_m = R * c
-            
-            # Ước lượng thời gian: Vận tốc di chuyển lớn nhất 120km/h = 2000 mét/phút
-            max_speed_m_per_min = 2000.0 
-            
-            # Trả về số phút tối thiểu để giữ luật Admissible cho A*
-            return dist_m / max_speed_m_per_min 
-        except KeyError:
-            return 0
+    def get_weight(u, v, d):
+        # Trả về travel_time_min, nếu không có giả định rất lớn
+        return d.get('travel_time_min', 9999.0)
 
-
-  # Tính toán ma trận khoảng cách giữa các node quan trọng (Origin + Destinations)
+    # Tính toán ma trận khoảng cách giữa các node quan trọng (Origin + Destinations)
     pois = [origin] + destinations
     dist_matrix = {}
     path_matrix = {}
@@ -66,10 +41,10 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
                 path_matrix[u][v] = [u]
             else:
                 try:
-                    # Chạy A* cho từng cặp
-                    path = nx.astar_path(G_simple, u, v, heuristic=heuristic, weight='weight')
-                    # Tính tổng thời gian
-                    cost = sum(G_simple[path[i]][path[i+1]]['weight'] for i in range(len(path)-1))
+                    # Chạy A* với đồ thị của MapGraph, heuristic của hệ thống
+                    path = nx.astar_path(map_graph.G, u, v, heuristic=map_graph.get_heuristic_distance, weight=get_weight)
+                    # Tính tổng chi phí (chọn cạnh ngắn nhất giữa u và v trong MultiDiGraph)
+                    cost = sum(min(get_weight(path[i], path[i+1], d) for d in map_graph.G[path[i]][path[i+1]].values()) for i in range(len(path)-1))
                     dist_matrix[u][v] = cost
                     path_matrix[u][v] = path
                 except nx.NetworkXNoPath:
@@ -95,7 +70,7 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
                 
             arrival_time = current_time + travel_t
             
-            # --- CSP: Kiểm tra ráng buộc Time Window ---
+            # --- CSP: Kiểm tra ràng buộc Time Window ---
             if dest in time_windows:
                 tw_start, tw_end = time_windows[dest]
                 # Nếu đến quá sớm, chờ đến tw_start
