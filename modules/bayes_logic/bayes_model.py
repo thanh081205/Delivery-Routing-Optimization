@@ -1,70 +1,135 @@
 """
-bayes_model.py — Module ước lượng xác suất kẹt xe cho từng cạnh
 
-Module này bám theo interface trong INTERFACES.md:
-    compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> pd.DataFrame
-
-Lưu ý quan trọng:
-- Sơ đồ học thuật của TV4 dùng mạng Bayes 11 node.
-- Nhưng interface tích hợp hiện tại chỉ truyền vào:
-    + edges: length, maxspeed, highway
-    + weather
-    + time_of_day
-- Vì vậy code v1 này triển khai một phiên bản suy luận rút gọn, trong đó một số node
-  ẩn được “marginalize” hoặc xấp xỉ thông qua các feature quan sát được.
+Mạng Bayes rút gọn:
+    Weather        -> RoadCondition
+    TimeOfDay      -> TrafficDemand
+    RoadType       -> TrafficDemand, EffectiveCapacity, AccidentRisk
+    MaxSpeed       -> EffectiveCapacity
+    Length         -> AccidentRisk
+    RoadCondition, TrafficDemand, EffectiveCapacity, AccidentRisk -> Congestion
 """
 
 from __future__ import annotations
 
+import re
+from itertools import product
 from typing import Any
 
 import pandas as pd
 
 
-# Xác suất nền theo loại đường (proxy cho RoadType -> EffectiveCapacity / TrafficDemand)
-_HIGHWAY_BASE_PRIOR = {
-    "motorway": 0.16,
-    "trunk": 0.20,
-    "primary": 0.25,
-    "secondary": 0.31,
-    "tertiary": 0.36,
-    "residential": 0.41,
-    "living_street": 0.43,
-    "service": 0.46,
-    "unclassified": 0.38,
+ROAD_EXPRESSWAY = "expressway"
+ROAD_ARTERIAL = "arterial"
+ROAD_COLLECTOR = "collector"
+ROAD_LOCAL = "local"
+ROAD_UNKNOWN = "unknown"
+
+_HIGHWAY_TO_ROAD_TYPE = {
+    "motorway": ROAD_EXPRESSWAY,
+    "motorway_link": ROAD_EXPRESSWAY,
+    "trunk": ROAD_EXPRESSWAY,
+    "trunk_link": ROAD_EXPRESSWAY,
+    "primary": ROAD_ARTERIAL,
+    "primary_link": ROAD_ARTERIAL,
+    "secondary": ROAD_ARTERIAL,
+    "secondary_link": ROAD_ARTERIAL,
+    "tertiary": ROAD_COLLECTOR,
+    "tertiary_link": ROAD_COLLECTOR,
+    "unclassified": ROAD_COLLECTOR,
+    "residential": ROAD_LOCAL,
+    "living_street": ROAD_LOCAL,
+    "service": ROAD_LOCAL,
+    "road": ROAD_UNKNOWN,
 }
 
-# Ảnh hưởng của thời tiết tới chất lượng đường và nguy cơ sự cố
-_WEATHER_CONDITION_EFFECT = {
-    "clear": 0.05,
-    "rain": 0.28,
+# P(RoadCondition = bad | Weather)
+_CPT_BAD_ROAD_CONDITION = {
+    "clear": 0.08,
+    "rain": 0.45,
 }
 
-# Ảnh hưởng của khung giờ tới nhu cầu giao thông
-_TIME_DEMAND_EFFECT = {
-    "normal": 0.08,
-    "peak": 0.30,
+# P(TrafficDemand = high | TimeOfDay, RoadType)
+_CPT_HIGH_TRAFFIC_DEMAND = {
+    ("normal", ROAD_EXPRESSWAY): 0.24,
+    ("normal", ROAD_ARTERIAL): 0.32,
+    ("normal", ROAD_COLLECTOR): 0.28,
+    ("normal", ROAD_LOCAL): 0.20,
+    ("normal", ROAD_UNKNOWN): 0.25,
+    ("peak", ROAD_EXPRESSWAY): 0.55,
+    ("peak", ROAD_ARTERIAL): 0.70,
+    ("peak", ROAD_COLLECTOR): 0.62,
+    ("peak", ROAD_LOCAL): 0.48,
+    ("peak", ROAD_UNKNOWN): 0.55,
 }
 
+# Base P(EffectiveCapacity = low | RoadType), then adjusted by speed/weather.
+_CPT_LOW_CAPACITY_BASE = {
+    ROAD_EXPRESSWAY: 0.10,
+    ROAD_ARTERIAL: 0.18,
+    ROAD_COLLECTOR: 0.24,
+    ROAD_LOCAL: 0.32,
+    ROAD_UNKNOWN: 0.27,
+}
 
-def _clip(value: float, low: float = 0.05, high: float = 0.98) -> float:
-    return max(low, min(high, value))
+# Base P(AccidentRisk = high | Weather, RoadType), then adjusted by length.
+_CPT_HIGH_ACCIDENT_RISK_BASE = {
+    ("clear", ROAD_EXPRESSWAY): 0.04,
+    ("clear", ROAD_ARTERIAL): 0.05,
+    ("clear", ROAD_COLLECTOR): 0.05,
+    ("clear", ROAD_LOCAL): 0.04,
+    ("clear", ROAD_UNKNOWN): 0.05,
+    ("rain", ROAD_EXPRESSWAY): 0.13,
+    ("rain", ROAD_ARTERIAL): 0.16,
+    ("rain", ROAD_COLLECTOR): 0.15,
+    ("rain", ROAD_LOCAL): 0.12,
+    ("rain", ROAD_UNKNOWN): 0.14,
+}
+
+# P(Congestion = true | HighDemand, LowCapacity, BadCondition, HighAccident)
+_CPT_CONGESTION = {
+    (False, False, False, False): 0.04,
+    (True, False, False, False): 0.18,
+    (False, True, False, False): 0.16,
+    (False, False, True, False): 0.10,
+    (False, False, False, True): 0.12,
+    (True, True, False, False): 0.42,
+    (True, False, True, False): 0.30,
+    (True, False, False, True): 0.34,
+    (False, True, True, False): 0.28,
+    (False, True, False, True): 0.31,
+    (False, False, True, True): 0.22,
+    (True, True, True, False): 0.58,
+    (True, True, False, True): 0.63,
+    (True, False, True, True): 0.50,
+    (False, True, True, True): 0.47,
+    (True, True, True, True): 0.82,
+}
+
+_NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def _clip_probability(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
 
 
 def _normalize_highway(value: Any) -> str:
-    """
-    Chuẩn hóa trường highway từ OSM.
+    for item in _as_list(value):
+        token = str(item).strip().lower()
+        if token:
+            return token
+    return "unclassified"
 
-    highway có thể là:
-    - str: "primary"
-    - list[str]: ["residential", "unclassified"]
-    """
-    if isinstance(value, list) and value:
-        value = value[0]
-    if value is None:
-        return "unclassified"
-    token = str(value).strip().lower()
-    return token if token else "unclassified"
+
+def _road_type_from_highway(highway: str) -> str:
+    return _HIGHWAY_TO_ROAD_TYPE.get(highway, ROAD_UNKNOWN)
 
 
 def _normalize_weather(weather: str) -> str:
@@ -72,13 +137,23 @@ def _normalize_weather(weather: str) -> str:
     aliases = {
         "clear": "clear",
         "sunny": "clear",
+        "dry": "clear",
         "normal": "clear",
+        "nang": "clear",
+        "nắng": "clear",
+        "troi nang": "clear",
+        "trời nắng": "clear",
         "rain": "rain",
         "rainy": "rain",
         "storm": "rain",
+        "heavy_rain": "rain",
+        "mua": "rain",
+        "mưa": "rain",
+        "troi mua": "rain",
+        "trời mưa": "rain",
     }
     if token not in aliases:
-        raise ValueError("weather phải là 'rain' hoặc 'clear' (có thể dùng alias như sunny/rainy).")
+        raise ValueError("weather phải là 'rain' hoặc 'clear'.")
     return aliases[token]
 
 
@@ -88,99 +163,135 @@ def _normalize_time_of_day(time_of_day: str) -> str:
         "normal": "normal",
         "offpeak": "normal",
         "off_peak": "normal",
+        "binh thuong": "normal",
+        "bình thường": "normal",
         "peak": "peak",
         "rush": "peak",
         "rush_hour": "peak",
+        "cao_diem": "peak",
+        "cao diem": "peak",
+        "cao điểm": "peak",
+        "gio cao diem": "peak",
+        "giờ cao điểm": "peak",
     }
     if token not in aliases:
         raise ValueError("time_of_day phải là 'peak' hoặc 'normal'.")
     return aliases[token]
 
 
-def _safe_maxspeed(value: Any) -> float:
-    """Chuẩn hóa maxspeed về float. map_loader của TV1 thường đã xử lý trước."""
-    if isinstance(value, (int, float)):
-        return float(value)
+def _first_number(value: Any) -> float | None:
+    for item in _as_list(value):
+        if isinstance(item, (int, float)):
+            return float(item)
 
-    try:
-        if isinstance(value, list) and value:
-            value = value[0]
-        text = str(value).strip().split()[0]
-        return float(text)
-    except (TypeError, ValueError, IndexError):
+        text = str(item).strip().lower().replace(",", ".")
+        match = _NUMBER_RE.search(text)
+        if not match:
+            continue
+        try:
+            return float(match.group(0))
+        except ValueError:
+            continue
+    return None
+
+
+def _safe_maxspeed(value: Any) -> float:
+    speed = _first_number(value)
+    if speed is None or speed != speed or speed <= 0:
         return 40.0
 
+    text = str(_as_list(value)[0]).lower() if _as_list(value) else ""
+    if "mph" in text:
+        return speed * 1.60934
+    return speed
 
-def _speed_capacity_penalty(maxspeed: float) -> float:
-    """
-    Xấp xỉ node EffectiveCapacity từ maxspeed.
-    Tốc độ càng thấp -> năng lực thực tế càng thấp -> nguy cơ tắc càng cao.
-    """
+
+def _safe_length(value: Any) -> float:
+    length = _first_number(value)
+    if length is None or length != length or length <= 0:
+        return 100.0
+    return length
+
+
+def _low_capacity_probability(road_type: str, maxspeed: float, weather: str) -> float:
+    probability = _CPT_LOW_CAPACITY_BASE[road_type]
+
     if maxspeed >= 70:
-        return 0.04
-    if maxspeed >= 50:
-        return 0.09
-    if maxspeed >= 35:
-        return 0.15
-    return 0.22
+        probability -= 0.04
+    elif maxspeed < 30:
+        probability += 0.13
+    elif maxspeed < 45:
+        probability += 0.07
+
+    if weather == "rain":
+        probability += 0.06
+
+    return _clip_probability(probability)
 
 
-def _length_exposure_penalty(length_m: float) -> float:
+def _high_accident_probability(road_type: str, weather: str, length_m: float) -> float:
+    probability = _CPT_HIGH_ACCIDENT_RISK_BASE[(weather, road_type)]
+
+    if length_m > 2000:
+        probability += 0.07
+    elif length_m > 1000:
+        probability += 0.04
+    elif length_m > 500:
+        probability += 0.02
+
+    return _clip_probability(probability)
+
+
+def _state_probability(state_is_true: bool, probability_true: float) -> float:
+    return probability_true if state_is_true else 1.0 - probability_true
+
+
+def _infer_congestion_probability(
+    *,
+    highway: str,
+    maxspeed: float,
+    length_m: float,
+    weather: str,
+    time_of_day: str,
+) -> float:
     """
-    Đoạn đường dài hơn có xác suất gặp cản trở cao hơn đôi chút.
-    Đây là một penalty nhẹ để phản ánh thời gian phơi nhiễm trên cạnh.
+    Marginalize các node ẩn để tính P(Congestion=True | evidence).
+
+    Evidence quan sát được: weather, time_of_day, highway, maxspeed, length.
+    Node ẩn: TrafficDemand, EffectiveCapacity, RoadCondition, AccidentRisk.
     """
-    if length_m <= 200:
-        return 0.02
-    if length_m <= 500:
-        return 0.05
-    if length_m <= 1000:
-        return 0.08
-    return 0.11
+    road_type = _road_type_from_highway(highway)
+    p_bad_condition = _CPT_BAD_ROAD_CONDITION[weather]
+    p_high_demand = _CPT_HIGH_TRAFFIC_DEMAND[(time_of_day, road_type)]
+    p_low_capacity = _low_capacity_probability(road_type, maxspeed, weather)
+    p_high_accident = _high_accident_probability(road_type, weather, length_m)
 
+    p_congestion = 0.0
+    for high_demand, low_capacity, bad_condition, high_accident in product((False, True), repeat=4):
+        p_hidden_state = (
+            _state_probability(high_demand, p_high_demand)
+            * _state_probability(low_capacity, p_low_capacity)
+            * _state_probability(bad_condition, p_bad_condition)
+            * _state_probability(high_accident, p_high_accident)
+        )
+        p_congestion += p_hidden_state * _CPT_CONGESTION[
+            (high_demand, low_capacity, bad_condition, high_accident)
+        ]
 
-def _infer_probabilities(highway: str, maxspeed: float, length_m: float, weather: str, time_of_day: str) -> float:
-    """
-    Suy luận xác suất kẹt xe theo phiên bản rút gọn của mạng Bayes 11 node.
-
-    Mapping với mạng Bayes tổng quát:
-    - RoadType        <- highway
-    - RoadCondition   <- weather
-    - TrafficDemand   <- time_of_day + road prior
-    - EffectiveCapacity <- highway + maxspeed + weather proxy
-    - AccidentRisk    <- weather + road prior
-    - CongestionLevel <- kết hợp các node trung gian
-    """
-    base_prior = _HIGHWAY_BASE_PRIOR.get(highway, _HIGHWAY_BASE_PRIOR["unclassified"])
-    p_bad_condition = _clip(_WEATHER_CONDITION_EFFECT[weather] + 0.10 * (1.0 if highway in {"residential", "service"} else 0.0))
-    p_high_demand = _clip(base_prior + _TIME_DEMAND_EFFECT[time_of_day])
-    p_low_capacity = _clip(base_prior * 0.55 + _speed_capacity_penalty(maxspeed) + 0.20 * p_bad_condition)
-    p_high_accident = _clip(0.08 + 0.35 * p_bad_condition + 0.15 * base_prior + 0.50 * _length_exposure_penalty(length_m))
-
-    # Noisy-OR: nếu một trong các yếu tố demand/capacity/accident cao, nguy cơ tắc sẽ tăng.
-    p_congestion = 1.0 - (
-        (1.0 - 0.88 * p_high_demand)
-        * (1.0 - 0.82 * p_low_capacity)
-        * (1.0 - 0.76 * p_high_accident)
-    )
-
-    return _clip(p_congestion)
+    return _clip_probability(p_congestion)
 
 
 def compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> pd.DataFrame:
     """
-    Tính xác suất kẹt xe cho từng cạnh.
+    Tính xác suất kẹt xe cho từng cạnh bằng mạng Bayes
 
     Args:
-        edges (pd.DataFrame): Cần có tối thiểu các cột u, v, length, maxspeed, highway.
-        weather (str): "rain" hoặc "clear".
-        time_of_day (str): "peak" hoặc "normal".
+        edges: DataFrame cần có tối thiểu các cột u, v, length, maxspeed, highway.
+        weather: "rain" hoặc "clear".
+        time_of_day: "peak" hoặc "normal".
 
     Returns:
-        pd.DataFrame: DataFrame gồm các cột:
-            - u (int)
-            - v (int)
-            - p_congestion (float, trong [0, 1])
+        DataFrame gồm đúng các cột u, v, p_congestion.
     """
     required_columns = {"u", "v", "length", "maxspeed", "highway"}
     missing = required_columns.difference(edges.columns)
@@ -190,25 +301,25 @@ def compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> p
     weather_norm = _normalize_weather(weather)
     time_norm = _normalize_time_of_day(time_of_day)
 
-    working = edges.copy()
-    working["highway_norm"] = working["highway"].apply(_normalize_highway)
-    working["maxspeed_norm"] = working["maxspeed"].apply(_safe_maxspeed)
-    working["length_norm"] = pd.to_numeric(working["length"], errors="coerce").fillna(100.0)
-
-    working["p_congestion"] = working.apply(
-        lambda row: _infer_probabilities(
-            highway=row["highway_norm"],
-            maxspeed=float(row["maxspeed_norm"]),
-            length_m=float(row["length_norm"]),
+    records: list[dict[str, Any]] = []
+    for _, row in edges.iterrows():
+        highway = _normalize_highway(row["highway"])
+        probability = _infer_congestion_probability(
+            highway=highway,
+            maxspeed=_safe_maxspeed(row["maxspeed"]),
+            length_m=_safe_length(row["length"]),
             weather=weather_norm,
             time_of_day=time_norm,
-        ),
-        axis=1,
-    )
+        )
+        records.append(
+            {
+                "u": row["u"],
+                "v": row["v"],
+                "p_congestion": round(float(probability), 4),
+            }
+        )
 
-    result = working[["u", "v", "p_congestion"]].copy()
-    result["p_congestion"] = result["p_congestion"].astype(float).round(4)
-    return result
+    return pd.DataFrame(records, columns=["u", "v", "p_congestion"])
 
 
 __all__ = ["compute_congestion"]

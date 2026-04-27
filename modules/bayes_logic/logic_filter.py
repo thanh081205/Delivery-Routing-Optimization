@@ -1,13 +1,3 @@
-"""
-logic_filter.py — Module lọc đồ thị theo luật logic giao thông
-
-Module này nhận graph_data từ TV1, duyệt qua đồ thị NetworkX gốc và xóa các cạnh
-không hợp lệ trước khi chuyển sang A* của TV2.
-
-Thiết kế bám theo interface trong INTERFACES.md:
-    filter_graph(graph_data: dict, vehicle_weight: float) -> nx.MultiDiGraph
-"""
-
 from __future__ import annotations
 
 import re
@@ -16,13 +6,34 @@ from typing import Any
 import networkx as nx
 
 
-_RESTRICTED_VALUES = {
+_ACCESS_FIELDS = (
+    "access",
+    "vehicle",
+    "motor_vehicle",
+    "motorcar",
+    "hgv",
+    "goods",
+)
+
+_DELIVERY_ALLOW_VALUES = {
+    "yes",
+    "permissive",
+    "designated",
+    "delivery",
+}
+
+_RESTRICTED_ACCESS_VALUES = {
     "no",
     "private",
     "restricted",
-    "delivery",
     "forestry",
     "agricultural",
+    "customers",
+    "permit",
+    "emergency",
+    "official",
+    "bus",
+    "psv",
 }
 
 _CLOSED_HIGHWAY_VALUES = {
@@ -32,11 +43,25 @@ _CLOSED_HIGHWAY_VALUES = {
     "planned",
     "razed",
     "demolished",
+    "disused",
 }
+
+_INACTIVE_VALUES = {
+    "yes",
+    "true",
+    "1",
+}
+
+_WEIGHT_LIMIT_FIELDS = (
+    "maxweight",
+    "maxgcweight",
+)
+
+_NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 
 def _as_list(value: Any) -> list[Any]:
-    """Chuẩn hóa giá trị bất kỳ thành list để xử lý thống nhất."""
+    """Chuẩn hóa giá trị OSM thành list để xử lý đồng nhất."""
     if value is None:
         return []
     if isinstance(value, (list, tuple, set)):
@@ -45,114 +70,143 @@ def _as_list(value: Any) -> list[Any]:
 
 
 def _normalize_token(value: Any) -> str:
-    """Chuẩn hóa một token về chuỗi lower-case, bỏ khoảng trắng dư."""
     return str(value).strip().lower()
 
 
-def _extract_first_float(value: Any) -> float | None:
-    """
-    Trích số thực đầu tiên từ dữ liệu OSM.
+def _tag_tokens(edge_data: dict[str, Any], field: str) -> list[str]:
+    return [_normalize_token(value) for value in _as_list(edge_data.get(field))]
 
-    Hỗ trợ các dạng phổ biến như:
-    - 7.5
-    - "7.5"
-    - "7.5 t"
-    - "7,5 tons"
-    - ["7.5", "10"]
-    """
-    for item in _as_list(value):
-        if isinstance(item, (int, float)):
-            return float(item)
 
-        text = str(item).strip().lower().replace(",", ".")
-        match = re.search(r"-?\d+(?:\.\d+)?", text)
-        if match:
-            try:
-                return float(match.group(0))
-            except ValueError:
-                continue
-    return None
+def _has_delivery_override(edge_data: dict[str, Any]) -> bool:
+    for field in ("delivery", "hgv", "goods"):
+        if any(token in _DELIVERY_ALLOW_VALUES for token in _tag_tokens(edge_data, field)):
+            return True
+    return False
 
 
 def _has_restricted_access(edge_data: dict[str, Any]) -> bool:
     """
-    Kiểm tra các thuộc tính hạn chế truy cập thường gặp trong OSM.
+    IF access/vehicle/motor_vehicle/hgv bị cấm THEN loại cạnh.
 
-    Các tag thường dùng:
-    - access
-    - motor_vehicle
-    - vehicle
+    Với xe giao hàng, các tag explicit như delivery=yes hoặc access=delivery
+    được xem là hợp lệ.
     """
-    for field in ("access", "motor_vehicle", "vehicle"):
-        for raw_value in _as_list(edge_data.get(field)):
-            if _normalize_token(raw_value) in _RESTRICTED_VALUES:
+    if _has_delivery_override(edge_data):
+        return False
+
+    for field in _ACCESS_FIELDS:
+        for token in _tag_tokens(edge_data, field):
+            if token in _DELIVERY_ALLOW_VALUES:
+                continue
+            if token in _RESTRICTED_ACCESS_VALUES:
                 return True
     return False
 
 
+def _parse_weight_tons(value: Any) -> float | None:
+    """
+    Trích giới hạn tải trọng từ tag OSM và quy đổi về tấn.
+
+    Ví dụ hợp lệ: 7.5, "7.5 t", "7500 kg", "16000 lbs".
+    Các giá trị như "none", "default", "unknown" được bỏ qua.
+    """
+    for item in _as_list(value):
+        if isinstance(item, (int, float)):
+            if float(item) != float(item):
+                continue
+            return float(item)
+
+        text = str(item).strip().lower().replace(",", ".")
+        if text in {"", "none", "no", "default", "unknown", "unsigned"}:
+            continue
+
+        match = _NUMBER_RE.search(text)
+        if not match:
+            continue
+
+        try:
+            number = float(match.group(0))
+        except ValueError:
+            continue
+
+        if "kg" in text:
+            return number / 1000.0
+        if "lb" in text:
+            return number * 0.00045359237
+        return number
+
+    return None
+
+
 def _violates_weight_limit(edge_data: dict[str, Any], vehicle_weight: float) -> bool:
-    """Kiểm tra xe có vượt giới hạn tải trọng của cạnh hay không."""
-    maxweight = _extract_first_float(edge_data.get("maxweight"))
-    if maxweight is None:
+    """
+    IF vehicle_weight > maxweight THEN loại cạnh.
+    """
+    limits = [
+        limit
+        for field in _WEIGHT_LIMIT_FIELDS
+        if (limit := _parse_weight_tons(edge_data.get(field))) is not None
+    ]
+    if not limits:
         return False
-    return vehicle_weight > maxweight
+    return vehicle_weight > min(limits)
 
 
 def _is_closed_or_under_construction(edge_data: dict[str, Any]) -> bool:
-    """Phát hiện các cạnh đang đóng, bị loại bỏ, hoặc đang xây dựng."""
-    highway_values = [_normalize_token(v) for v in _as_list(edge_data.get("highway"))]
-    if any(v in _CLOSED_HIGHWAY_VALUES for v in highway_values):
+    """
+    IF highway/construction/disused/abandoned thể hiện cạnh không hoạt động
+    THEN loại cạnh.
+    """
+    highway_values = _tag_tokens(edge_data, "highway")
+    if any(value in _CLOSED_HIGHWAY_VALUES for value in highway_values):
         return True
 
-    if _normalize_token(edge_data.get("construction")) not in {"", "none"}:
+    construction_values = _tag_tokens(edge_data, "construction")
+    if any(value not in {"", "no", "none", "false", "0"} for value in construction_values):
         return True
+
+    for field in ("disused", "abandoned"):
+        if any(value in _INACTIVE_VALUES for value in _tag_tokens(edge_data, field)):
+            return True
 
     return False
 
 
 def _has_invalid_length(edge_data: dict[str, Any]) -> bool:
-    """Loại cạnh có độ dài không hợp lệ hoặc thiếu dữ liệu nghiêm trọng."""
-    length = edge_data.get("length")
+    """
+    IF length thiếu hoặc <= 0 THEN loại cạnh.
+    """
     try:
-        return length is None or float(length) <= 0
+        length = float(edge_data["length"])
+        return edge_data.get("length") is None or length != length or length <= 0
     except (TypeError, ValueError):
         return True
 
 
 def filter_graph(graph_data: dict, vehicle_weight: float) -> nx.MultiDiGraph:
     """
-    Lọc đồ thị theo các luật logic giao thông.
+    Lọc đồ thị theo các luật logic giao thông 
 
     Args:
-        graph_data (dict): Output từ TV1, tối thiểu phải có khóa "G".
-        vehicle_weight (float): Tải trọng xe tính theo tấn.
+        graph_data: Output từ TV1, tối thiểu phải có khóa "G".
+        vehicle_weight: Tải trọng xe, đơn vị tấn.
 
     Returns:
-        nx.MultiDiGraph: Đồ thị đã xóa các cạnh vi phạm luật.
-
-    Luật v1 đang áp dụng:
-    1. Cạnh có access / vehicle / motor_vehicle bị cấm -> xóa.
-    2. Cạnh có giới hạn tải trọng và xe vượt ngưỡng -> xóa.
-    3. Cạnh đóng / construction / proposed -> xóa.
-    4. Cạnh có length không hợp lệ -> xóa.
-
-    Ghi chú:
-    - Hàm làm việc trực tiếp trên graph_data["G"], không chỉ dựa vào DataFrame edges,
-      vì metadata đầy đủ của OSM thường nằm trong edge attributes của NetworkX graph.
-    - Hàm lưu thống kê vào cleaned_graph.graph["logic_filter_stats"] để tiện debug.
+        nx.MultiDiGraph đã xóa các cạnh vi phạm luật.
     """
     if "G" not in graph_data:
         raise KeyError("graph_data phải chứa khóa 'G'.")
 
     if not isinstance(vehicle_weight, (int, float)):
         raise TypeError("vehicle_weight phải là số (int hoặc float).")
+    if float(vehicle_weight) < 0:
+        raise ValueError("vehicle_weight không được âm.")
 
     original_graph = graph_data["G"]
     if not isinstance(original_graph, nx.MultiDiGraph):
         raise TypeError("graph_data['G'] phải là nx.MultiDiGraph.")
 
     cleaned_graph = original_graph.copy()
-
     stats = {
         "removed_invalid_length": 0,
         "removed_restricted_access": 0,
@@ -161,6 +215,7 @@ def filter_graph(graph_data: dict, vehicle_weight: float) -> nx.MultiDiGraph:
         "removed_total": 0,
         "remaining_edges": cleaned_graph.number_of_edges(),
         "vehicle_weight_ton": float(vehicle_weight),
+        "oneway_rule": "handled_by_directed_osmnx_graph",
     }
 
     edges_to_remove: list[tuple[Any, Any, Any]] = []
