@@ -40,7 +40,7 @@ def load_map(place_name: str) -> dict:
         graph_data (dict): {
             "G": nx.MultiDiGraph,        # Đồ thị NetworkX gốc từ osmnx
             "nodes": pd.DataFrame,       # Thông tin các nút (node_id, x, y)
-            "edges": pd.DataFrame        # Thông tin các cạnh (u, v, length, maxspeed, highway)
+            "edges": pd.DataFrame        # Thông tin các cạnh (u, v, key, length, maxspeed, highway)
         }
     """
 ```
@@ -52,7 +52,7 @@ from modules.graph.map_loader import load_map
 graph_data = load_map("Quan 1, Ho Chi Minh City, Vietnam")
 G         = graph_data["G"]
 nodes     = graph_data["nodes"]   # DataFrame: [node_id, x, y]
-edges     = graph_data["edges"]   # DataFrame: [u, v, length, maxspeed, highway]
+edges     = graph_data["edges"]   # DataFrame: [u, v, key, length, maxspeed, highway]
 ```
 
 ---
@@ -136,7 +136,7 @@ Dự đoán thời gian di chuyển (phút) cho từng cạnh dựa trên đặc
 
 ### Input
 ```python
-edges: pd.DataFrame           # graph_data["edges"] — cần cột: length, maxspeed, highway
+edges: pd.DataFrame           # graph_data["edges"] — cần cột: u, v, key, length, maxspeed, highway
 congestion_df: pd.DataFrame   # Output từ Module 3 — cần cột: u, v, p_congestion
 ```
 
@@ -173,7 +173,7 @@ Chạy thuật toán A* trên đồ thị đã có trọng số, có tích hợp
 ### Input
 ```python
 cleaned_graph: nx.MultiDiGraph    # Output từ Module 2
-weighted_edges: pd.DataFrame      # Output từ Module 4 — cột: u, v, travel_time_min
+weighted_edges: pd.DataFrame      # Output từ Module 4 — cột: u, v, key, travel_time_min
 origin: int                       # node_id điểm xuất phát
 destinations: list[int]           # Danh sách node_id các điểm giao hàng
 time_windows: dict                # { node_id: (earliest_min, latest_min) }
@@ -218,6 +218,7 @@ print(result["total_time_min"])  # 47.3
 ## Ghi chú chung
 
 - Tất cả `node_id` đều là kiểu `int` lấy từ OSMnx (osmid).
+- Cột `key` trong `edges` là khóa cạnh của `MultiDiGraph`, dùng để phân biệt nhiều cạnh giữa cùng 2 node.
 - Thời gian tính theo **phút** (float), không dùng giây hay giờ.
 - Nếu một module chưa hoàn thiện, dùng **mock function** trả về dữ liệu giả đúng định dạng để không block các module khác.
 - Mọi thay đổi interface phải được **thông báo trên nhóm chat** và cập nhật file này.
