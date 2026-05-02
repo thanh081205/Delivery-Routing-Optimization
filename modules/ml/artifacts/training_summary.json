@@ -1,0 +1,20 @@
+{
+  "dataset_source": "map_loader (1864 edges)",
+  "num_samples": 7456,
+  "feature_columns": [
+    "length_m",
+    "maxspeed_kmh",
+    "road_type",
+    "weather",
+    "is_peak_hour",
+    "congestion_prob"
+  ],
+  "target_column": "travel_time_min",
+  "selected_model": "decision_tree",
+  "metrics": {
+    "name": "decision_tree",
+    "mae": 0.0659917219777146,
+    "rmse": 0.09268866032425677,
+    "r2": 0.7686751426896818
+  }
+}

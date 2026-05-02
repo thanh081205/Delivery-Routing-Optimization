@@ -24,8 +24,10 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
     map_graph.update_edge_weights(weighted_edges)
 
     def get_weight(u, v, d):
-        # Trả về travel_time_min, nếu không có giả định rất lớn
-        return d.get('travel_time_min', 9999.0)
+        # Trong MultiDiGraph, d chứa danh sách các cạnh (theo key). Lấy min travel_time_min.
+        if not d:
+            return 9999.0
+        return min(edge_attr.get('travel_time_min', 9999.0) for edge_attr in d.values())
 
     # Tính toán ma trận khoảng cách giữa các node quan trọng (Origin + Destinations)
     pois = [origin] + destinations
@@ -44,7 +46,7 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
                     # Chạy A* với đồ thị của MapGraph, heuristic của hệ thống
                     path = nx.astar_path(map_graph.G, u, v, heuristic=map_graph.get_heuristic_distance, weight=get_weight)
                     # Tính tổng chi phí (chọn cạnh ngắn nhất giữa u và v trong MultiDiGraph)
-                    cost = sum(min(get_weight(path[i], path[i+1], d) for d in map_graph.G[path[i]][path[i+1]].values()) for i in range(len(path)-1))
+                    cost = sum(get_weight(path[i], path[i+1], map_graph.G[path[i]][path[i+1]]) for i in range(len(path)-1))
                     dist_matrix[u][v] = cost
                     path_matrix[u][v] = path
                 except nx.NetworkXNoPath:

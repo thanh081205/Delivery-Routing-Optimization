@@ -1,0 +1,15 @@
+feature,importance
+num__length_m,0.8213513233552427
+num__congestion_prob,0.17344040826911972
+cat__road_type_residential,0.0026680349195181783
+cat__road_type_primary,0.0011649146431396459
+num__is_peak_hour,0.0007599453128702768
+cat__road_type_secondary,0.00034436204406685663
+cat__road_type_tertiary,0.00013125925352281672
+cat__road_type_primary_link,9.426398218129929e-05
+num__maxspeed_kmh,4.5488220338622695e-05
+cat__road_type_secondary_link,0.0
+cat__road_type_tertiary_link,0.0
+cat__road_type_unclassified,0.0
+cat__weather_clear,0.0
+cat__weather_rain,0.0
