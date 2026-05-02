@@ -37,7 +37,7 @@ def load_map(latitude: float, longitude: float, dist: int = 1000) -> dict:
 
     # Bước 3: Lọc các cột cần thiết
     nodes = nodes[["x", "y"]].reset_index()
-    edges = edges.reset_index()[["u", "v", "length", "maxspeed", "highway"]]
+    edges = edges.reset_index()[["u", "v", "key", "length", "maxspeed", "highway"]]
 
     # Bước 4: Điền giá trị mặc định cho các ô bị thiếu
     edges["maxspeed"] = edges["maxspeed"].fillna("40")

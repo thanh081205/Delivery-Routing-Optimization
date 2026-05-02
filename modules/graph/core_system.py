@@ -19,19 +19,18 @@ class MapGraph:
     def update_edge_weights(self, weighted_edges: pd.DataFrame):
         """
         Cập nhật trọng số thời gian từ ML vào đồ thị NetworkX.
-        Input: weighted_edges (có các cột 'u', 'v', 'travel_time_min')
+        Input: weighted_edges (bắt buộc có các cột 'u', 'v', 'key', 'travel_time_min')
         """
-        # Chuyển DataFrame thành dictionary dạng {(u, v): travel_time_min}
-        # Lưu ý: OSMnx graph là MultiDiGraph nên có key cạnh (thường là 0)
         weight_dict = {}
         for _, row in weighted_edges.iterrows():
             u, v = int(row['u']), int(row['v'])
+            key = int(row['key'])  # Đọc thêm key từ dataframe
             time_min = float(row['travel_time_min'])
             
-            # Gán cho cạnh đầu tiên giữa u và v (key=0)
-            weight_dict[(u, v, 0)] = {'travel_time_min': time_min}
+            # Gán chính xác cho từng cạnh (u, v, key)
+            weight_dict[(u, v, key)] = {'travel_time_min': time_min}
             
-        # Cập nhật hàng loạt vào đồ thị G với độ phức tạp tối ưu
+        # Cập nhật hàng loạt vào đồ thị G
         nx.set_edge_attributes(self.G, weight_dict)
 
     def apply_logic_filter(self, cleaned_graph: nx.MultiDiGraph):
