@@ -286,14 +286,14 @@ def compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> p
     Tính xác suất kẹt xe cho từng cạnh bằng mạng Bayes
 
     Args:
-        edges: DataFrame cần có tối thiểu các cột u, v, length, maxspeed, highway.
+        edges: DataFrame cần có tối thiểu các cột u, v, key, length, maxspeed, highway.
         weather: "rain" hoặc "clear".
         time_of_day: "peak" hoặc "normal".
 
     Returns:
-        DataFrame gồm đúng các cột u, v, p_congestion.
+        DataFrame gồm đúng các cột u, v, key, p_congestion.
     """
-    required_columns = {"u", "v", "length", "maxspeed", "highway"}
+    required_columns = {"u", "v", "key", "length", "maxspeed", "highway"}
     missing = required_columns.difference(edges.columns)
     if missing:
         raise KeyError(f"edges đang thiếu các cột bắt buộc: {sorted(missing)}")
@@ -315,11 +315,12 @@ def compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> p
             {
                 "u": row["u"],
                 "v": row["v"],
+                "key": row["key"],
                 "p_congestion": round(float(probability), 4),
             }
         )
 
-    return pd.DataFrame(records, columns=["u", "v", "p_congestion"])
+    return pd.DataFrame(records, columns=["u", "v", "key", "p_congestion"])
 
 
 __all__ = ["compute_congestion"]
