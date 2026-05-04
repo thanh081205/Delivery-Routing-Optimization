@@ -60,6 +60,69 @@ _WEIGHT_LIMIT_FIELDS = (
 _NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return False
+
+
+def _coerce_edge_id(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return value
+
+
+def _edge_id(u: Any, v: Any, key: Any) -> tuple[Any, Any, Any]:
+    return (_coerce_edge_id(u), _coerce_edge_id(v), _coerce_edge_id(key))
+
+
+def _metadata_from_edges_dataframe(edges: Any) -> dict[tuple[Any, Any, Any], dict[str, Any]]:
+    """
+    Read normalized edge attributes from graph_data["edges"] when TV1 provides them.
+    This keeps the logic rules usable even if the NetworkX edge is missing a field.
+    """
+    if edges is None or not hasattr(edges, "iterrows") or not hasattr(edges, "columns"):
+        return {}
+
+    columns = set(edges.columns)
+    if not {"u", "v", "key"}.issubset(columns):
+        return {}
+
+    metadata: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for _, row in edges.iterrows():
+        edge_key = _edge_id(row["u"], row["v"], row["key"])
+        metadata[edge_key] = {
+            column: row[column]
+            for column in edges.columns
+            if column not in {"u", "v", "key"} and not _is_missing_value(row[column])
+        }
+
+    return metadata
+
+
+def _sync_edge_metadata(cleaned_graph: nx.MultiDiGraph, graph_data: dict) -> int:
+    dataframe_metadata = _metadata_from_edges_dataframe(graph_data.get("edges"))
+    if not dataframe_metadata:
+        return 0
+
+    synced_edges = 0
+    for u, v, key, data in cleaned_graph.edges(keys=True, data=True):
+        row_data = dataframe_metadata.get(_edge_id(u, v, key))
+        if not row_data:
+            continue
+
+        for field, value in row_data.items():
+            if field not in data or _is_missing_value(data[field]):
+                data[field] = value
+        synced_edges += 1
+
+    return synced_edges
+
+
 def _as_list(value: Any) -> list[Any]:
     """Chuẩn hóa giá trị OSM thành list để xử lý đồng nhất."""
     if value is None:
@@ -176,9 +239,12 @@ def _has_invalid_length(edge_data: dict[str, Any]) -> bool:
     """
     IF length thiếu hoặc <= 0 THEN loại cạnh.
     """
+    if "length" not in edge_data or _is_missing_value(edge_data.get("length")):
+        return True
+
     try:
         length = float(edge_data["length"])
-        return edge_data.get("length") is None or length != length or length <= 0
+        return length != length or length <= 0
     except (TypeError, ValueError):
         return True
 
@@ -207,7 +273,9 @@ def filter_graph(graph_data: dict, vehicle_weight: float) -> nx.MultiDiGraph:
         raise TypeError("graph_data['G'] phải là nx.MultiDiGraph.")
 
     cleaned_graph = original_graph.copy()
+    synced_edges = _sync_edge_metadata(cleaned_graph, graph_data)
     stats = {
+        "original_edges": cleaned_graph.number_of_edges(),
         "removed_invalid_length": 0,
         "removed_restricted_access": 0,
         "removed_weight_limit": 0,
@@ -215,6 +283,7 @@ def filter_graph(graph_data: dict, vehicle_weight: float) -> nx.MultiDiGraph:
         "removed_total": 0,
         "remaining_edges": cleaned_graph.number_of_edges(),
         "vehicle_weight_ton": float(vehicle_weight),
+        "metadata_edges_synced": synced_edges,
         "oneway_rule": "handled_by_directed_osmnx_graph",
     }
 

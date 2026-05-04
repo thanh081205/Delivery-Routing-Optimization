@@ -12,9 +12,12 @@ Mạng Bayes rút gọn:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from itertools import product
 from typing import Any
 
+import networkx as nx
 import pandas as pd
 
 
@@ -106,6 +109,44 @@ _CPT_CONGESTION = {
 }
 
 _NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return False
+
+
+def _coerce_edge_id(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return value
+
+
+def _edge_id(u: Any, v: Any, key: Any) -> tuple[Any, Any, Any]:
+    return (_coerce_edge_id(u), _coerce_edge_id(v), _coerce_edge_id(key))
+
+
+def _edge_metadata_lookup(edges: Any) -> dict[tuple[Any, Any, Any], dict[str, Any]]:
+    if edges is None or not hasattr(edges, "iterrows") or not hasattr(edges, "columns"):
+        return {}
+
+    if not {"u", "v", "key"}.issubset(set(edges.columns)):
+        return {}
+
+    lookup: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for _, row in edges.iterrows():
+        lookup[_edge_id(row["u"], row["v"], row["key"])] = {
+            column: row[column]
+            for column in edges.columns
+            if column not in {"u", "v", "key"} and not _is_missing_value(row[column])
+        }
+
+    return lookup
 
 
 def _clip_probability(value: float) -> float:
@@ -211,6 +252,79 @@ def _safe_length(value: Any) -> float:
     if length is None or length != length or length <= 0:
         return 100.0
     return length
+
+
+def _edge_attr(data: dict[str, Any], fallback: dict[str, Any], field: str, default: Any) -> Any:
+    value = data.get(field)
+    if _is_missing_value(value):
+        value = fallback.get(field, default)
+    if _is_missing_value(value):
+        return default
+    return value
+
+
+def _edge_dataframe_from_graph(graph: nx.Graph, supplemental_edges: Any = None) -> pd.DataFrame:
+    if not isinstance(graph, (nx.DiGraph, nx.MultiDiGraph)):
+        raise TypeError("graph phải là nx.DiGraph hoặc nx.MultiDiGraph.")
+
+    metadata = _edge_metadata_lookup(supplemental_edges)
+    records: list[dict[str, Any]] = []
+
+    if isinstance(graph, nx.MultiDiGraph):
+        edge_iter = graph.edges(keys=True, data=True)
+    else:
+        edge_iter = ((u, v, 0, data) for u, v, data in graph.edges(data=True))
+
+    for u, v, key, data in edge_iter:
+        fallback = metadata.get(_edge_id(u, v, key), {})
+        records.append(
+            {
+                "u": u,
+                "v": v,
+                "key": key,
+                "length": _edge_attr(data, fallback, "length", 100.0),
+                "maxspeed": _edge_attr(data, fallback, "maxspeed", 40.0),
+                "highway": _edge_attr(data, fallback, "highway", "unclassified"),
+            }
+        )
+
+    return pd.DataFrame(records, columns=["u", "v", "key", "length", "maxspeed", "highway"])
+
+
+def _edge_dataframe_from_source(source: Any) -> pd.DataFrame:
+    if isinstance(source, pd.DataFrame):
+        return source.copy()
+
+    if isinstance(source, dict):
+        if "G" in source:
+            return _edge_dataframe_from_graph(source["G"], supplemental_edges=source.get("edges"))
+        if "edges" in source:
+            return source["edges"].copy()
+        raise KeyError("graph_data phải chứa khóa 'G' hoặc 'edges'.")
+
+    if isinstance(source, (nx.DiGraph, nx.MultiDiGraph)):
+        return _edge_dataframe_from_graph(source)
+
+    raise TypeError("source phải là graph_data, nx.Graph hoặc pd.DataFrame edges.")
+
+
+def _node_ids_from_source(source: Any, edges: pd.DataFrame) -> list[Any]:
+    graph = source.get("G") if isinstance(source, dict) else source
+    if isinstance(graph, (nx.DiGraph, nx.MultiDiGraph)):
+        return list(graph.nodes())
+
+    if edges.empty:
+        return []
+
+    return list(pd.concat([edges["u"], edges["v"]]).drop_duplicates())
+
+
+def _observed_at_iso(observed_at: datetime | str | None) -> str:
+    if observed_at is None:
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(observed_at, datetime):
+        return observed_at.isoformat()
+    return str(observed_at)
 
 
 def _low_capacity_probability(road_type: str, maxspeed: float, weather: str) -> float:
@@ -323,4 +437,125 @@ def compute_congestion(edges: pd.DataFrame, weather: str, time_of_day: str) -> p
     return pd.DataFrame(records, columns=["u", "v", "key", "p_congestion"])
 
 
-__all__ = ["compute_congestion"]
+def compute_graph_congestion(
+    source: Any,
+    weather: str,
+    time_of_day: str,
+    observed_at: datetime | str | None = None,
+) -> pd.DataFrame:
+    """
+    Compute congestion probabilities for every edge in a graph-like source.
+
+    Args:
+        source: graph_data dict, nx.MultiDiGraph/nx.DiGraph, or edges DataFrame.
+        weather: real-time weather state ("rain" or "clear", aliases accepted).
+        time_of_day: real-time demand state ("peak" or "normal", aliases accepted).
+        observed_at: optional timestamp for the real-time update.
+
+    Returns:
+        DataFrame with columns [u, v, key, p_congestion, weather, time_of_day, observed_at].
+    """
+    weather_norm = _normalize_weather(weather)
+    time_norm = _normalize_time_of_day(time_of_day)
+    timestamp = _observed_at_iso(observed_at)
+
+    edges = _edge_dataframe_from_source(source)
+    congestion_df = compute_congestion(edges, weather=weather_norm, time_of_day=time_norm)
+    congestion_df["weather"] = weather_norm
+    congestion_df["time_of_day"] = time_norm
+    congestion_df["observed_at"] = timestamp
+    return congestion_df
+
+
+def compute_congestion_matrix(
+    source: Any,
+    weather: str,
+    time_of_day: str,
+    observed_at: datetime | str | None = None,
+    fill_value: float = 0.0,
+    parallel_edge_strategy: str = "max",
+) -> pd.DataFrame:
+    """
+    Return a node-by-node congestion probability matrix for the whole graph.
+
+    Parallel edges are collapsed into one matrix cell. The exact edge-level
+    probabilities, including edge keys, are stored in matrix.attrs["edge_probabilities"].
+    """
+    if parallel_edge_strategy not in {"max", "mean", "min"}:
+        raise ValueError("parallel_edge_strategy phải là 'max', 'mean' hoặc 'min'.")
+
+    edges = _edge_dataframe_from_source(source)
+    node_ids = _node_ids_from_source(source, edges)
+    edge_probabilities = compute_graph_congestion(
+        edges,
+        weather=weather,
+        time_of_day=time_of_day,
+        observed_at=observed_at,
+    )
+
+    matrix = pd.DataFrame(
+        fill_value,
+        index=pd.Index(node_ids, name="u"),
+        columns=pd.Index(node_ids, name="v"),
+        dtype=float,
+    )
+
+    if not edge_probabilities.empty:
+        grouped = edge_probabilities.groupby(["u", "v"])["p_congestion"].agg(parallel_edge_strategy)
+        for (u, v), probability in grouped.items():
+            if u in matrix.index and v in matrix.columns:
+                matrix.loc[u, v] = round(float(probability), 4)
+
+    matrix.attrs["edge_probabilities"] = edge_probabilities
+    matrix.attrs["weather"] = _normalize_weather(weather)
+    matrix.attrs["time_of_day"] = _normalize_time_of_day(time_of_day)
+    matrix.attrs["observed_at"] = edge_probabilities["observed_at"].iloc[0] if not edge_probabilities.empty else _observed_at_iso(observed_at)
+    matrix.attrs["parallel_edge_strategy"] = parallel_edge_strategy
+    matrix.attrs["fill_value"] = fill_value
+    return matrix
+
+
+@dataclass
+class BayesCongestionModel:
+    """Reusable real-time wrapper for TV4 Bayes congestion inference."""
+
+    source: Any | None = None
+    default_weather: str = "clear"
+    default_time_of_day: str = "normal"
+    last_matrix: pd.DataFrame | None = field(init=False, default=None)
+    last_edge_probabilities: pd.DataFrame | None = field(init=False, default=None)
+
+    def update_realtime(
+        self,
+        source: Any | None = None,
+        weather: str | None = None,
+        time_of_day: str | None = None,
+        observed_at: datetime | str | None = None,
+    ) -> pd.DataFrame:
+        graph_source = self.source if source is None else source
+        if graph_source is None:
+            raise ValueError("Cần truyền source hoặc khởi tạo BayesCongestionModel(source=...).")
+
+        matrix = compute_congestion_matrix(
+            graph_source,
+            weather=weather or self.default_weather,
+            time_of_day=time_of_day or self.default_time_of_day,
+            observed_at=observed_at,
+        )
+        self.source = graph_source
+        self.last_matrix = matrix
+        self.last_edge_probabilities = matrix.attrs["edge_probabilities"].copy()
+        return matrix
+
+    def as_feature_frame(self) -> pd.DataFrame:
+        if self.last_edge_probabilities is None:
+            raise RuntimeError("Chưa có kết quả. Hãy gọi update_realtime() trước.")
+        return self.last_edge_probabilities.copy()
+
+
+__all__ = [
+    "BayesCongestionModel",
+    "compute_congestion",
+    "compute_congestion_matrix",
+    "compute_graph_congestion",
+]
