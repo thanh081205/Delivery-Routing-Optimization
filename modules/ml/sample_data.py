@@ -55,6 +55,7 @@ def generate_edge_catalog(num_edges: int = 300, random_state: int = 42) -> pd.Da
         {
             "u": u_nodes.astype(int),
             "v": v_nodes.astype(int),
+            "key": np.zeros(num_edges, dtype=int),
             "length": lengths.astype(float),
             "maxspeed": speeds,
             "highway": road_type_values.astype(str),
@@ -66,10 +67,10 @@ def demo_edges() -> pd.DataFrame:
     """Small deterministic sample for quick demos and integration tests."""
     return pd.DataFrame(
         [
-            {"u": 1, "v": 2, "length": 180.0, "maxspeed": 30, "highway": "residential"},
-            {"u": 2, "v": 3, "length": 420.0, "maxspeed": 40, "highway": "tertiary"},
-            {"u": 3, "v": 4, "length": 900.0, "maxspeed": 50, "highway": "secondary"},
-            {"u": 4, "v": 5, "length": 1600.0, "maxspeed": 55, "highway": "primary"},
+            {"u": 1, "v": 2, "key": 0, "length": 180.0, "maxspeed": 30, "highway": "residential"},
+            {"u": 2, "v": 3, "key": 0, "length": 420.0, "maxspeed": 40, "highway": "tertiary"},
+            {"u": 3, "v": 4, "key": 0, "length": 900.0, "maxspeed": 50, "highway": "secondary"},
+            {"u": 4, "v": 5, "key": 0, "length": 1600.0, "maxspeed": 55, "highway": "primary"},
         ]
     )
 

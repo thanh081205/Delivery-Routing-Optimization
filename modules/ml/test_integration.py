@@ -20,6 +20,8 @@ def run_demo() -> None:
         weather="rain",
         time_of_day="peak",
     )
+    if "key" not in congestion_df.columns and "key" in edges.columns:
+        congestion_df["key"] = edges["key"].values
     congestion_df["weather"] = "rain"
     congestion_df["time_of_day"] = "peak"
 
@@ -34,6 +36,14 @@ def run_demo() -> None:
     print("\nPredicted weighted edges for TV2:")
     print(weighted_edges.to_string(index=False))
 
+    expected_columns = {"u", "v", "travel_time_min"}
+    if "key" in edges.columns:
+        expected_columns.add("key")
+    assert expected_columns.issubset(weighted_edges.columns)
+    assert len(weighted_edges) == len(edges)
+    assert weighted_edges["travel_time_min"].notna().all()
+    assert (weighted_edges["travel_time_min"] > 0).all()
+
     first_edge = edges.iloc[0].to_dict()
     single_prediction = predict_one_edge(
         edge=first_edge,
@@ -46,6 +56,7 @@ def run_demo() -> None:
         f" u={int(first_edge['u'])} -> v={int(first_edge['v'])},"
         f" travel_time_min={single_prediction:.4f}"
     )
+    print("\nTV3 integration assertions OK")
 
 
 if __name__ == "__main__":
