@@ -7,14 +7,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import joblib
+import numpy as np
 import pandas as pd
 
 from modules.ml.preprocess import cast_feature_types, edge_to_feature_row
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL_PATH = ROOT_DIR / "features" / "travel_time_model.pkl"
+DEFAULT_MODEL_PATH = ROOT_DIR / "features" / "travel_time_model.npy"
+LEGACY_MODEL_PATH = ROOT_DIR / "features" / "travel_time_model.pkl"
 
 
 class TravelTimePredictor:
@@ -30,16 +31,31 @@ class TravelTimePredictor:
         self.dataset_source = artifact.get("dataset_source", "unknown")
 
     def _load_or_create_artifact(self, model_path: Path) -> Dict[str, Any]:
-        if not model_path.exists():
+        if not model_path.exists() and not LEGACY_MODEL_PATH.exists():
             from modules.ml.train import train_and_save
 
             train_and_save()
 
-        artifact = joblib.load(model_path)
+        if model_path.exists():
+            artifact = self._load_artifact(model_path)
+        else:
+            artifact = self._load_artifact(LEGACY_MODEL_PATH)
         required_keys = {"feature_columns", "pipeline"}
         missing = required_keys.difference(artifact.keys())
         if missing:
             raise KeyError(f"Invalid model artifact at {model_path}; missing keys: {sorted(missing)}")
+        return artifact
+
+    def _load_artifact(self, model_path: Path) -> Dict[str, Any]:
+        if model_path.suffix == ".npy":
+            artifact = np.load(model_path, allow_pickle=True).item()
+        else:
+            import joblib
+
+            artifact = joblib.load(model_path)
+
+        if not isinstance(artifact, dict):
+            raise TypeError(f"Invalid model artifact at {model_path}; expected dict.")
         return artifact
 
     def predict_travel_time(self, edge_features: Dict[str, Any]) -> float:

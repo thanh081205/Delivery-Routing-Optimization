@@ -15,7 +15,6 @@ from pathlib import Path
 import random
 from typing import Any, Dict, List, Tuple
 
-import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -36,7 +35,7 @@ DATA_DIR = ROOT_DIR / "data"
 FEATURES_DIR = ROOT_DIR / "features"
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
 MOCK_DATASET_PATH = DATA_DIR / "mock_edge_travel_time.csv"
-MODEL_PATH = FEATURES_DIR / "travel_time_model.pkl"
+MODEL_PATH = FEATURES_DIR / "travel_time_model.npy"
 SUMMARY_PATH = ARTIFACTS_DIR / "training_summary.json"
 MODEL_COMPARISON_CSV = ARTIFACTS_DIR / "model_comparison.csv"
 FEATURE_IMPORTANCE_CSV = ARTIFACTS_DIR / "feature_importance.csv"
@@ -317,7 +316,9 @@ def train_and_save(
         "dataset_source": source_name,
         "artifacts_dir": str(ARTIFACTS_DIR),
     }
-    joblib.dump(artifact, MODEL_PATH)
+    # Save the sklearn artifact in .npy form to match the project requirement
+    # that extracted feature/model files live under NumPy/HDF-style extensions.
+    np.save(MODEL_PATH, artifact, allow_pickle=True)
 
     print(f"Dataset source: {source_name}")
     print(f"Saved mock dataset to: {MOCK_DATASET_PATH}")
