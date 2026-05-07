@@ -21,7 +21,7 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import learning_curve, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeRegressor
@@ -41,6 +41,8 @@ MODEL_COMPARISON_CSV = ARTIFACTS_DIR / "model_comparison.csv"
 FEATURE_IMPORTANCE_CSV = ARTIFACTS_DIR / "feature_importance.csv"
 MODEL_COMPARISON_PNG = ARTIFACTS_DIR / "model_comparison.png"
 FEATURE_IMPORTANCE_PNG = ARTIFACTS_DIR / "feature_importance.png"
+LOSS_CURVE_CSV = ARTIFACTS_DIR / "loss_curve.csv"
+LOSS_CURVE_PNG = ARTIFACTS_DIR / "loss_curve.png"
 
 FEATURE_COLUMNS = [
     "length_m",
@@ -184,6 +186,35 @@ def _extract_feature_importance(best_model: Pipeline) -> pd.DataFrame:
     return importance_df
 
 
+def _build_loss_curve(best_name: str, best_model: Pipeline, x: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
+    """
+    Build a report-friendly loss curve using train/validation RMSE over
+    increasing training-set sizes.
+    """
+    train_sizes, train_scores, validation_scores = learning_curve(
+        best_model,
+        x,
+        y,
+        train_sizes=np.linspace(0.2, 1.0, 5),
+        cv=5,
+        scoring="neg_mean_squared_error",
+    )
+
+    train_rmse = np.sqrt(np.clip(-train_scores, a_min=0.0, a_max=None))
+    validation_rmse = np.sqrt(np.clip(-validation_scores, a_min=0.0, a_max=None))
+
+    return pd.DataFrame(
+        {
+            "model_name": best_name,
+            "train_size": train_sizes.astype(int),
+            "train_rmse_mean": train_rmse.mean(axis=1),
+            "train_rmse_std": train_rmse.std(axis=1),
+            "validation_rmse_mean": validation_rmse.mean(axis=1),
+            "validation_rmse_std": validation_rmse.std(axis=1),
+        }
+    )
+
+
 def _export_training_artifacts(
     dataset: pd.DataFrame,
     source_name: str,
@@ -191,11 +222,13 @@ def _export_training_artifacts(
     best_name: str,
     best_metrics: Dict[str, float],
     importance_df: pd.DataFrame,
+    loss_curve_df: pd.DataFrame,
 ) -> None:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
     comparison_df.to_csv(MODEL_COMPARISON_CSV, index=False)
     importance_df.to_csv(FEATURE_IMPORTANCE_CSV, index=False)
+    loss_curve_df.to_csv(LOSS_CURVE_CSV, index=False)
 
     summary = {
         "dataset_source": source_name,
@@ -222,6 +255,31 @@ def _export_training_artifacts(
     plt.title("Top Feature Importance")
     plt.tight_layout()
     plt.savefig(FEATURE_IMPORTANCE_PNG, dpi=180)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(
+        loss_curve_df["train_size"],
+        loss_curve_df["train_rmse_mean"],
+        marker="o",
+        linewidth=2,
+        color="#5B8FF9",
+        label="Train RMSE",
+    )
+    plt.plot(
+        loss_curve_df["train_size"],
+        loss_curve_df["validation_rmse_mean"],
+        marker="o",
+        linewidth=2,
+        color="#F08BB4",
+        label="Validation RMSE",
+    )
+    plt.xlabel("Training Samples")
+    plt.ylabel("RMSE (minutes)")
+    plt.title("Loss Curve")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(LOSS_CURVE_PNG, dpi=180)
     plt.close()
 
 
@@ -298,6 +356,7 @@ def train_and_save(
 
     comparison_df = pd.DataFrame(comparison_rows).sort_values("rmse", ascending=True, ignore_index=True)
     importance_df = _extract_feature_importance(best_model)
+    loss_curve_df = _build_loss_curve(best_name, best_model, x, y)
     _export_training_artifacts(
         dataset=dataset,
         source_name=source_name,
@@ -305,6 +364,7 @@ def train_and_save(
         best_name=best_name,
         best_metrics=best_metrics,
         importance_df=importance_df,
+        loss_curve_df=loss_curve_df,
     )
 
     artifact = {
