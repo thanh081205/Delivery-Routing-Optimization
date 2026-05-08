@@ -63,6 +63,22 @@ class DeliveryCoordinator:
             time_windows=vehicle.deliveries,
             start_time=vehicle.current_time
         )
+
+        # Mô phỏng xe đã giao xong điểm đầu tiên trong lộ trình
+        # để trigger_replanning có thể re-plan từ giữa đường
+        if plan and plan.get("visited_order"):
+            first_dest = plan["visited_order"][0]
+            arrival_time = plan["arrival_times"].get(first_dest)
+            if arrival_time is not None:
+                vehicle.update_state(
+                    new_location=first_dest,
+                    time_spent=arrival_time - vehicle.current_time
+                )
+                vehicle.pop_delivery(first_dest)
+                print(f"📦 Đã giao xong điểm đầu: Node {first_dest} lúc {arrival_time:.2f} phút")
+                print(f"📍 Xe đang ở: Node {vehicle.current_location} | ⏰ Giờ hiện tại: {vehicle.current_time:.2f} phút")
+                print(f"📦 Còn lại {len(vehicle.deliveries)} điểm cần giao: {list(vehicle.deliveries.keys())}")
+
         return plan
 
     def trigger_replanning(self, vehicle: DeliveryVehicle, new_weather: str, new_time_of_day: str) -> Optional[Dict[str, Any]]:

@@ -58,12 +58,15 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
     best_route_full = []
     best_visited_order = []
     
+    best_arrival_times = {}
+
     for perm in permutations(destinations):
         current_time = start_time
         current_node = origin
         valid_permutation = True
         full_route = [origin]
-        
+        arrival_times = {}
+
         for dest in perm:
             travel_t = dist_matrix[current_node][dest]
             if travel_t == float('inf'):
@@ -83,7 +86,9 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
                     valid_permutation = False
                     break
             # -------------------------------------------
-            
+
+            arrival_times[dest] = arrival_time
+
             # Kết nối path
             segment_path = path_matrix[current_node][dest]
             # Loại bỏ nút đầu tiên của segment để không bị lặp nút trong full_route
@@ -96,16 +101,19 @@ def run_astar(cleaned_graph: nx.MultiDiGraph, weighted_edges: pd.DataFrame, orig
             best_time = current_time
             best_route_full = full_route
             best_visited_order = list(perm)
+            best_arrival_times = arrival_times
 
     if best_time == float('inf'):
         return {
             "route": [],
             "total_time_min": float('inf'),
-            "visited_order": []
+            "visited_order": [],
+            "arrival_times": {}
         }
 
     return {
         "route": best_route_full,
-        "total_time_min": best_time - start_time, # Chỉ trả về duration 
-        "visited_order": best_visited_order
+        "total_time_min": best_time - start_time,  # Chỉ trả về duration
+        "visited_order": best_visited_order,
+        "arrival_times": best_arrival_times        # {node_id: arrival_time_min}
     }
