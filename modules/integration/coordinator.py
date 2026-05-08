@@ -27,21 +27,53 @@ class DeliveryCoordinator:
         self.current_weather = "clear"
         self.current_time_of_day = "normal"
 
+    def set_local_congestion(self, edge_ids: list, p_congestion: float):
+        """
+        Inject xác suất kẹt xe cục bộ vào một số cạnh cụ thể.
+        Dùng để mô phỏng tắc đường điểm (tai nạn, công trình...).
+
+        Args:
+            edge_ids: Danh sách tuple (u, v) của các cạnh cần inject.
+            p_congestion: Xác suất kẹt xe muốn gán (0.0 - 1.0).
+        """
+        if not hasattr(self, "_local_congestion"):
+            self._local_congestion = {}
+        for edge in edge_ids:
+            self._local_congestion[(edge[0], edge[1])] = float(p_congestion)
+
+    def _apply_local_congestion(self, congestion_df):
+        """Ghi đè p_congestion cục bộ vào congestion_df từ Bayes."""
+        if not hasattr(self, "_local_congestion") or not self._local_congestion:
+            return congestion_df
+        result = congestion_df.copy()
+        for idx, row in result.iterrows():
+            key = (row["u"], row["v"])
+            if key in self._local_congestion:
+                result.at[idx, "p_congestion"] = self._local_congestion[key]
+        return result
+
+    def clear_local_congestion(self):
+        """Xóa toàn bộ tắc đường cục bộ đã inject (dùng khi môi trường cải thiện)."""
+        self._local_congestion = {}
+
     def _update_environment_and_weights(self, weather: str, time_of_day: str):
         """Hàm nội bộ: Chạy TV4 và TV3 để cập nhật lại trọng số bản đồ."""
         self.current_weather = weather
         self.current_time_of_day = time_of_day
-        
+
         # 1. Chạy TV4: Cập nhật mạng Bayes để lấy ma trận kẹt xe mới
         self.bayes_model.update_realtime(weather=weather, time_of_day=time_of_day)
         congestion_df = self.bayes_model.as_feature_frame()
-        
-        # 2. Chạy TV3: Nội suy thời gian di chuyển (Travel Time) từ Học máy
+
+        # 2. Ghi đè tắc đường cục bộ (nếu có) lên kết quả Bayes
+        congestion_df = self._apply_local_congestion(congestion_df)
+
+        # 3. Chạy TV3: Nội suy thời gian di chuyển (Travel Time) từ Học máy
         new_weighted_edges = predict_travel_time(self.map_graph.edges_df, congestion_df)
-        
-        # 3. Chạy TV1: Cập nhật trọng số mới vào bản đồ NetworkX
+
+        # 4. Chạy TV1: Cập nhật trọng số mới vào bản đồ NetworkX
         self.map_graph.update_edge_weights(new_weighted_edges)
-        
+
         return new_weighted_edges
 
     def plan_initial_route(self, vehicle: DeliveryVehicle, weather: str, time_of_day: str) -> Dict[str, Any]:
