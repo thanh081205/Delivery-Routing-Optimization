@@ -1,0 +1,13 @@
+feature,importance
+num__length_m,0.5376004126267876
+num__congestion_prob,0.24771032708016769
+num__maxspeed_kmh,0.21034207768205382
+num__is_peak_hour,0.003552291985498459
+cat__road_type_service,0.0005232285550771824
+cat__road_type_motorway,0.00025738125274600213
+cat__weather_clear,1.4280817669346623e-05
+cat__road_type_primary,0.0
+cat__road_type_residential,0.0
+cat__road_type_secondary,0.0
+cat__road_type_tertiary,0.0
+cat__weather_rain,0.0
